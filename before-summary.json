@@ -1,0 +1,72 @@
+{
+  "wall_median_ms": 1158,
+  "cpu_median_ms": 1157.737,
+  "wall_ms": [
+    1140,
+    1164,
+    1158,
+    1182,
+    1193,
+    1168,
+    1199,
+    1166,
+    1156,
+    1099,
+    1132,
+    1182,
+    1147,
+    1092,
+    1074
+  ],
+  "cpu_ms": [
+    1140.39,
+    1164.577,
+    1157.737,
+    1183.541,
+    1194.376,
+    1167.794,
+    1199.39,
+    1166.275,
+    1156.115,
+    1098.704,
+    1132.562,
+    1183.406,
+    1147.183,
+    1092.583,
+    1075.131
+  ],
+  "samples": {
+    "all": 6983,
+    "JSONEachRow readRow": 6617,
+    "LC": 5748,
+    "null map first append reserve": 1138,
+    "null map realloc": 1097,
+    "null map rallocx": 893
+  },
+  "nullmap_parent": [
+    [
+      "PODArrayBase::reserveForNextSize",
+      1138
+    ],
+    [
+      "DB::SerializationString::deserializeTextJSON",
+      811
+    ],
+    [
+      "self",
+      72
+    ],
+    [
+      "DB::checkStringByFirstCharacterAndAssertTheRest",
+      28
+    ],
+    [
+      "DB::ColumnString::insertDefault",
+      18
+    ],
+    [
+      "[unknown]",
+      3
+    ]
+  ]
+}

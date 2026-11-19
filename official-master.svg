@@ -1,0 +1,982 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1400" height="518" onload="init(evt)" viewBox="0 0 1400 518" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1400.0" height="518.0" fill="url(#background)"  />
+<text id="title" x="700.00" y="24" >Official master CI | LowCardinality JSON deserialization</text>
+<text id="details" x="10.00" y="501" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1290.00" y="24" >Search</text>
+<text id="ignorecase" x="1374.00" y="24" >ic</text>
+<text id="matched" x="1290.00" y="501" > </text>
+<g id="frames">
+<g >
+<title>free_default (23 CPU samples, 0.57%)</title><rect x="570.1" y="373" width="7.9" height="15.0" fill="rgb(212,36,8)" rx="2" ry="2" />
+<text  x="573.06" y="383.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (156 CPU samples, 3.90%)</title><rect x="920.9" y="373" width="53.8" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="923.92" y="383.5" >Alloc..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (64 CPU samples, 1.60%)</title><rect x="375.7" y="389" width="22.0" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="378.68" y="399.5" >C..</text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;8ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reserveForNextSize&lt;&gt; (174 CPU samples, 4.35%)</title><rect x="914.7" y="389" width="60.0" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="917.72" y="399.5" >void D..</text>
+</g>
+<g >
+<title>DB::ReadBufferWrapper&lt;std::nullptr_t&gt;::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="165" width="4.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1006.99" y="175.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (3 CPU samples, 0.07%)</title><rect x="1321.4" y="341" width="1.0" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1324.41" y="351.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (121 CPU samples, 3.02%)</title><rect x="146.5" y="405" width="41.7" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="149.48" y="415.5" >All..</text>
+</g>
+<g >
+<title>te_event_trigger (14 CPU samples, 0.35%)</title><rect x="573.2" y="357" width="4.8" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="576.17" y="367.5" ></text>
+</g>
+<g >
+<title>operator delete (150 CPU samples, 3.75%)</title><rect x="1331.8" y="421" width="51.7" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
+<text  x="1334.75" y="431.5" >opera..</text>
+</g>
+<g >
+<title>je_nallocx (25 CPU samples, 0.62%)</title><rect x="1373.8" y="405" width="8.6" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="1376.80" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="149" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="159.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (46 CPU samples, 1.15%)</title><rect x="310.9" y="373" width="15.8" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="313.88" y="383.5" ></text>
+</g>
+<g >
+<title>hook_invoke_dalloc (3 CPU samples, 0.07%)</title><rect x="1307.6" y="341" width="1.1" height="15.0" fill="rgb(252,219,52)" rx="2" ry="2" />
+<text  x="1310.63" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (2 CPU samples, 0.05%)</title><rect x="692.8" y="389" width="0.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="695.76" y="399.5" ></text>
+</g>
+<g >
+<title>do_rallocx.llvm.12187241672127063502 (607 CPU samples, 15.16%)</title><rect x="1113.2" y="373" width="209.2" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="1116.24" y="383.5" >do_rallocx.llvm.12187241672..</text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="357" width="4.1" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="1006.99" y="367.5" ></text>
+</g>
+<g >
+<title>recv (12 CPU samples, 0.30%)</title><rect x="1004.0" y="53" width="4.1" height="15.0" fill="rgb(222,82,19)" rx="2" ry="2" />
+<text  x="1006.99" y="63.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (58 CPU samples, 1.45%)</title><rect x="1080.2" y="373" width="19.9" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1083.15" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="245" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="255.5" ></text>
+</g>
+<g >
+<title>all (4,004 CPU samples, 100%)</title><rect x="10.0" y="469" width="1380.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="479.5" ></text>
+</g>
+<g >
+<title>memcpy (18 CPU samples, 0.45%)</title><rect x="1308.7" y="341" width="6.2" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1311.66" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (4 CPU samples, 0.10%)</title><rect x="1330.4" y="421" width="1.4" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1333.37" y="431.5" ></text>
+</g>
+<g >
+<title>DB::ColumnVector&lt;char8_t&gt;::~ColumnVector (130 CPU samples, 3.25%)</title><rect x="578.7" y="405" width="44.8" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="581.68" y="415.5" >DB::..</text>
+</g>
+<g >
+<title>te_event_trigger (5 CPU samples, 0.12%)</title><rect x="1385.2" y="405" width="1.7" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="1388.17" y="415.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 CPU samples, 0.07%)</title><rect x="964.0" y="341" width="1.0" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="967.01" y="351.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (2 CPU samples, 0.05%)</title><rect x="622.8" y="373" width="0.7" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="625.80" y="383.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (5 CPU samples, 0.12%)</title><rect x="1057.1" y="325" width="1.7" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="1060.06" y="335.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="213" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="223.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 CPU samples, 0.07%)</title><rect x="1382.4" y="405" width="1.1" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="1385.42" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="181" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="191.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::free (226 CPU samples, 5.64%)</title><rect x="500.8" y="389" width="77.9" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="503.79" y="399.5" >Allocator..</text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;1ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reallocPowerOfTwoElements&lt;&gt; (141 CPU samples, 3.52%)</title><rect x="1010.2" y="373" width="48.6" height="15.0" fill="rgb(227,104,24)" rx="2" ry="2" />
+<text  x="1013.19" y="383.5" >void..</text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (6 CPU samples, 0.15%)</title><rect x="714.8" y="389" width="2.1" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="717.82" y="399.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (4 CPU samples, 0.10%)</title><rect x="576.6" y="341" width="1.4" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="579.61" y="351.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::realloc (3 CPU samples, 0.07%)</title><rect x="74.5" y="389" width="1.0" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="77.45" y="399.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (71 CPU samples, 1.77%)</title><rect x="668.3" y="389" width="24.5" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="671.29" y="399.5" >C..</text>
+</g>
+<g >
+<title>[unknown] (3 CPU samples, 0.07%)</title><rect x="343.6" y="357" width="1.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="346.63" y="367.5" ></text>
+</g>
+<g >
+<title>log (3 CPU samples, 0.07%)</title><rect x="1320.4" y="325" width="1.0" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="1323.38" y="335.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (55 CPU samples, 1.37%)</title><rect x="932.3" y="357" width="19.0" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="935.30" y="367.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="117" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="127.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 CPU samples, 0.07%)</title><rect x="1314.9" y="357" width="1.0" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="1317.87" y="367.5" ></text>
+</g>
+<g >
+<title>peak_event_handler (2 CPU samples, 0.05%)</title><rect x="621.8" y="341" width="0.7" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="624.76" y="351.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (51 CPU samples, 1.27%)</title><rect x="155.1" y="389" width="17.6" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="158.10" y="399.5" ></text>
+</g>
+<g >
+<title>DB::SerializationNullable::deserializeTextJSON (1,362 CPU samples, 34.02%)</title><rect x="861.0" y="421" width="469.4" height="15.0" fill="rgb(208,18,4)" rx="2" ry="2" />
+<text  x="863.95" y="431.5" >DB::SerializationNullable::deserializeTextJSON</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::uniqueInsertFrom (92 CPU samples, 2.30%)</title><rect x="817.2" y="421" width="31.7" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="820.18" y="431.5" >DB..</text>
+</g>
+<g >
+<title>DB::ColumnNullable::~ColumnNullable (828 CPU samples, 20.68%)</title><rect x="442.5" y="421" width="285.4" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="445.54" y="431.5" >DB::ColumnNullable::~ColumnNullable</text>
+</g>
+<g >
+<title>DB::ColumnNullable::isNullAt (8 CPU samples, 0.20%)</title><rect x="842.3" y="405" width="2.8" height="15.0" fill="rgb(220,73,17)" rx="2" ry="2" />
+<text  x="845.34" y="415.5" ></text>
+</g>
+<g >
+<title>je_realloc (23 CPU samples, 0.57%)</title><rect x="1322.4" y="373" width="8.0" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="1325.45" y="383.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (4 CPU samples, 0.10%)</title><rect x="882.0" y="373" width="1.4" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="884.98" y="383.5" ></text>
+</g>
+<g >
+<title>[unknown] (10 CPU samples, 0.25%)</title><rect x="439.1" y="373" width="3.4" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="442.10" y="383.5" ></text>
+</g>
+<g >
+<title>prof_sample_new_event_wait (4 CPU samples, 0.10%)</title><rect x="1320.0" y="341" width="1.4" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="1323.03" y="351.5" ></text>
+</g>
+<g >
+<title>je_malloc (45 CPU samples, 1.12%)</title><rect x="172.7" y="389" width="15.5" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="175.68" y="399.5" ></text>
+</g>
+<g >
+<title>je_malloc (53 CPU samples, 1.32%)</title><rect x="326.7" y="373" width="18.3" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="329.74" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="277" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="287.5" ></text>
+</g>
+<g >
+<title>do_rallocx.llvm.12187241672127063502 (3 CPU samples, 0.07%)</title><rect x="74.5" y="373" width="1.0" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="77.45" y="383.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::realloc (764 CPU samples, 19.08%)</title><rect x="1067.1" y="389" width="263.3" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="1070.06" y="399.5" >Allocator&lt;false, false&gt;::realloc</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::updateNullMaskImpl (35 CPU samples, 0.87%)</title><rect x="743.4" y="405" width="12.1" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="746.43" y="415.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (2 CPU samples, 0.05%)</title><rect x="421.5" y="373" width="0.7" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="424.52" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="341" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="351.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (4 CPU samples, 0.10%)</title><rect x="357.4" y="357" width="1.4" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="360.41" y="367.5" ></text>
+</g>
+<g >
+<title>DB::ColumnNullable::ColumnNullable (176 CPU samples, 4.40%)</title><rect x="188.2" y="405" width="60.6" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="191.19" y="415.5" >DB::Co..</text>
+</g>
+<g >
+<title>DB::ColumnVector&lt;char8_t&gt;::byteSize (6 CPU samples, 0.15%)</title><rect x="753.4" y="389" width="2.1" height="15.0" fill="rgb(222,78,18)" rx="2" ry="2" />
+<text  x="756.42" y="399.5" ></text>
+</g>
+<g >
+<title>DB::ReverseIndex&lt;unsigned long, DB::ColumnString&gt;::insert (179 CPU samples, 4.47%)</title><rect x="755.5" y="405" width="61.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="758.49" y="415.5" >DB::Re..</text>
+</g>
+<g >
+<title>LowCardinality JSON deserialization (4,004 CPU samples, 100.00%)</title><rect x="10.0" y="453" width="1380.0" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="13.00" y="463.5" >LowCardinality JSON deserialization</text>
+</g>
+<g >
+<title>arena_ralloc (304 CPU samples, 7.59%)</title><rect x="1210.1" y="357" width="104.8" height="15.0" fill="rgb(232,125,29)" rx="2" ry="2" />
+<text  x="1213.09" y="367.5" >arena_ralloc</text>
+</g>
+<g >
+<title>je_nallocx (62 CPU samples, 1.55%)</title><rect x="693.5" y="389" width="21.3" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="696.45" y="399.5" >j..</text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="309" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="319.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (51 CPU samples, 1.27%)</title><rect x="1027.1" y="341" width="17.6" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1030.08" y="351.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (4 CPU samples, 0.10%)</title><rect x="186.8" y="373" width="1.4" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="189.81" y="383.5" ></text>
+</g>
+<g >
+<title>je_nallocx (40 CPU samples, 1.00%)</title><rect x="345.0" y="373" width="13.8" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="348.00" y="383.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (9 CPU samples, 0.22%)</title><rect x="619.7" y="357" width="3.1" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="622.70" y="367.5" ></text>
+</g>
+<g >
+<title>__syscall_cp_asm (12 CPU samples, 0.30%)</title><rect x="1004.0" y="37" width="4.1" height="15.0" fill="rgb(243,175,42)" rx="2" ry="2" />
+<text  x="1006.99" y="47.5" ></text>
+</g>
+<g >
+<title>je_nallocx (59 CPU samples, 1.47%)</title><rect x="422.2" y="389" width="20.3" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="425.21" y="399.5" ></text>
+</g>
+<g >
+<title>DB::ColumnNullable::cloneResized (1,065 CPU samples, 26.60%)</title><rect x="75.5" y="421" width="367.0" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="78.48" y="431.5" >DB::ColumnNullable::cloneResized</text>
+</g>
+<g >
+<title>sdallocx_default (10 CPU samples, 0.25%)</title><rect x="1383.5" y="421" width="3.4" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="1386.45" y="431.5" ></text>
+</g>
+<g >
+<title>DB::IColumn::cloneEmpty (12 CPU samples, 0.30%)</title><rect x="856.8" y="421" width="4.2" height="15.0" fill="rgb(237,151,36)" rx="2" ry="2" />
+<text  x="859.82" y="431.5" ></text>
+</g>
+<g >
+<title>je_malloc (33 CPU samples, 0.82%)</title><rect x="1044.7" y="341" width="11.3" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1047.66" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::cloneResized (319 CPU samples, 7.97%)</title><rect x="248.8" y="405" width="110.0" height="15.0" fill="rgb(247,197,47)" rx="2" ry="2" />
+<text  x="251.85" y="415.5" >DB::ColumnStr..</text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="261" width="4.1" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="1006.99" y="271.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::~ColumnString (251 CPU samples, 6.27%)</title><rect x="492.2" y="405" width="86.5" height="15.0" fill="rgb(246,192,45)" rx="2" ry="2" />
+<text  x="495.17" y="415.5" >DB::Column..</text>
+</g>
+<g >
+<title>operator new (243 CPU samples, 6.07%)</title><rect x="358.8" y="405" width="83.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="361.79" y="415.5" >operator ..</text>
+</g>
+<g >
+<title>large_ralloc (3 CPU samples, 0.07%)</title><rect x="74.5" y="341" width="1.0" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="77.45" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (10 CPU samples, 0.25%)</title><rect x="418.1" y="373" width="3.4" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="421.07" y="383.5" ></text>
+</g>
+<g >
+<title>free_default (16 CPU samples, 0.40%)</title><rect x="617.3" y="373" width="5.5" height="15.0" fill="rgb(212,36,8)" rx="2" ry="2" />
+<text  x="620.28" y="383.5" ></text>
+</g>
+<g >
+<title>sdallocx_default (32 CPU samples, 0.80%)</title><rect x="716.9" y="405" width="11.0" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="719.89" y="415.5" ></text>
+</g>
+<g >
+<title>[unknown] (62 CPU samples, 1.55%)</title><rect x="227.5" y="389" width="21.3" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="230.48" y="399.5" >[..</text>
+</g>
+<g >
+<title>DB::SerializationString::deserializeTextJSON (509 CPU samples, 12.71%)</title><rect x="883.4" y="405" width="175.4" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="886.36" y="415.5" >DB::SerializationStrin..</text>
+</g>
+<g >
+<title>DB::ReadBufferWrapper&lt;std::nullptr_t&gt;::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="325" width="4.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1006.99" y="335.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (80 CPU samples, 2.00%)</title><rect x="542.5" y="373" width="27.6" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="545.49" y="383.5" >C..</text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;8ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reserveForNextSize&lt;&gt; (5 CPU samples, 0.12%)</title><rect x="881.6" y="389" width="1.8" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="884.63" y="399.5" ></text>
+</g>
+<g >
+<title>malloc_default (8 CPU samples, 0.20%)</title><rect x="1056.0" y="341" width="2.8" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="1059.03" y="351.5" ></text>
+</g>
+<g >
+<title>void DB::readJSONStringInto&lt;DB::PODArray&lt;char8_t, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;, void&gt; (244 CPU samples, 6.09%)</title><rect x="974.7" y="389" width="84.1" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
+<text  x="977.69" y="399.5" >void DB::..</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnVector&lt;int&gt;&gt;::getNestedColumn (23 CPU samples, 0.57%)</title><rect x="848.9" y="421" width="7.9" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="851.89" y="431.5" ></text>
+</g>
+<g >
+<title>memcpy (6 CPU samples, 0.15%)</title><rect x="1008.1" y="373" width="2.1" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1011.12" y="383.5" ></text>
+</g>
+<g >
+<title>bcmp (44 CPU samples, 1.10%)</title><rect x="802.0" y="389" width="15.2" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="805.02" y="399.5" ></text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;1ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reserveForNextSize&lt;&gt; (788 CPU samples, 19.68%)</title><rect x="1058.8" y="405" width="271.6" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="1061.79" y="415.5" >void DB::PODArrayBase&lt;1ul, 4096ul, A..</text>
+</g>
+<g >
+<title>arena_ralloc_no_move (72 CPU samples, 1.80%)</title><rect x="1281.1" y="341" width="24.8" height="15.0" fill="rgb(241,167,39)" rx="2" ry="2" />
+<text  x="1284.09" y="351.5" >a..</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::uniqueInsertData (259 CPU samples, 6.47%)</title><rect x="727.9" y="421" width="89.3" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="730.92" y="431.5" >DB::Column..</text>
+</g>
+<g >
+<title>operator delete (271 CPU samples, 6.77%)</title><rect x="623.5" y="405" width="93.4" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
+<text  x="626.49" y="415.5" >operator de..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (37 CPU samples, 0.92%)</title><rect x="604.5" y="373" width="12.8" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="607.53" y="383.5" ></text>
+</g>
+<g >
+<title>DB::SerializationLowCardinality::deserializeTextJSON (9 CPU samples, 0.22%)</title><rect x="1386.9" y="437" width="3.1" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="1389.90" y="447.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (12 CPU samples, 0.30%)</title><rect x="1004.0" y="373" width="4.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1006.99" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::getDataAt (8 CPU samples, 0.20%)</title><rect x="845.1" y="405" width="2.8" height="15.0" fill="rgb(226,100,23)" rx="2" ry="2" />
+<text  x="848.10" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::insertDefault (5 CPU samples, 0.12%)</title><rect x="881.6" y="405" width="1.8" height="15.0" fill="rgb(254,229,54)" rx="2" ry="2" />
+<text  x="884.63" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ReadBufferFromPocoSocketBase::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="101" width="4.1" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="1006.99" y="111.5" ></text>
+</g>
+<g >
+<title>Poco::Net::SocketImpl::receiveBytes (12 CPU samples, 0.30%)</title><rect x="1004.0" y="69" width="4.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1006.99" y="79.5" ></text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="197" width="4.1" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="1006.99" y="207.5" ></text>
+</g>
+<g >
+<title>rtree_read.llvm.12187241672127063502 (5 CPU samples, 0.12%)</title><rect x="726.2" y="389" width="1.7" height="15.0" fill="rgb(220,73,17)" rx="2" ry="2" />
+<text  x="729.19" y="399.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (4 CPU samples, 0.10%)</title><rect x="973.3" y="325" width="1.4" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="976.31" y="335.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::free (113 CPU samples, 2.82%)</title><rect x="584.5" y="389" width="39.0" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="587.54" y="399.5" >All..</text>
+</g>
+<g >
+<title>DB::SerializationLowCardinality::deserializeImpl (3,995 CPU samples, 99.78%)</title><rect x="10.0" y="437" width="1376.9" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
+<text  x="13.00" y="447.5" >DB::SerializationLowCardinality::deserializeImpl</text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (2 CPU samples, 0.05%)</title><rect x="578.0" y="373" width="0.7" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="580.99" y="383.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (6 CPU samples, 0.15%)</title><rect x="1054.0" y="325" width="2.0" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="1056.96" y="335.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (13 CPU samples, 0.32%)</title><rect x="970.2" y="341" width="4.5" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="973.21" y="351.5" ></text>
+</g>
+<g >
+<title>operator new (198 CPU samples, 4.95%)</title><rect x="290.5" y="389" width="68.3" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="293.55" y="399.5" >operato..</text>
+</g>
+<g >
+<title>je_malloc (71 CPU samples, 1.77%)</title><rect x="397.7" y="389" width="24.5" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="400.74" y="399.5" >j..</text>
+</g>
+<g >
+<title>malloc_default (28 CPU samples, 0.70%)</title><rect x="965.0" y="357" width="9.7" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="968.04" y="367.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (6 CPU samples, 0.15%)</title><rect x="712.8" y="373" width="2.0" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="715.75" y="383.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (107 CPU samples, 2.67%)</title><rect x="1021.9" y="357" width="36.9" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="1024.91" y="367.5" >All..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (38 CPU samples, 0.95%)</title><rect x="1100.1" y="373" width="13.1" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="1103.14" y="383.5" ></text>
+</g>
+<g >
+<title>DB::LimitReadBuffer::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="133" width="4.1" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="1006.99" y="143.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (53 CPU samples, 1.32%)</title><rect x="1355.5" y="405" width="18.3" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="1358.53" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="293" width="4.1" height="15.0" fill="rgb(245,185,44)" rx="2" ry="2" />
+<text  x="1006.99" y="303.5" ></text>
+</g>
+<g >
+<title>__llvm_libc::memcpy_ge64_avx512 (24 CPU samples, 0.60%)</title><rect x="1272.8" y="341" width="8.3" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="1275.82" y="351.5" ></text>
+</g>
+<g >
+<title>DB::IColumn::decompress (7 CPU samples, 0.17%)</title><rect x="225.1" y="389" width="2.4" height="15.0" fill="rgb(252,217,52)" rx="2" ry="2" />
+<text  x="228.06" y="399.5" ></text>
+</g>
+<g >
+<title>DB::ReadBufferWrapper&lt;std::nullptr_t&gt;::nextImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="229" width="4.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1006.99" y="239.5" ></text>
+</g>
+<g >
+<title>nstime_update_impl.llvm.17603558801553358136 (2 CPU samples, 0.05%)</title><rect x="974.0" y="309" width="0.7" height="15.0" fill="rgb(247,195,46)" rx="2" ry="2" />
+<text  x="977.00" y="319.5" ></text>
+</g>
+<g >
+<title>DB::ColumnIndex::insertIndex (56 CPU samples, 1.40%)</title><rect x="56.2" y="421" width="19.3" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="59.18" y="431.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (2 CPU samples, 0.05%)</title><rect x="1386.2" y="389" width="0.7" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1389.21" y="399.5" ></text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;1ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reserveForNextSize&lt;&gt; (3 CPU samples, 0.07%)</title><rect x="74.5" y="405" width="1.0" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="77.45" y="415.5" ></text>
+</g>
+<g >
+<title>arena_ralloc (3 CPU samples, 0.07%)</title><rect x="74.5" y="357" width="1.0" height="15.0" fill="rgb(232,125,29)" rx="2" ry="2" />
+<text  x="77.45" y="367.5" ></text>
+</g>
+<g >
+<title>__llvm_libc::memcpy_ge64_avx512 (3 CPU samples, 0.07%)</title><rect x="74.5" y="325" width="1.0" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="77.45" y="335.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (19 CPU samples, 0.47%)</title><rect x="1315.9" y="357" width="6.5" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="1318.90" y="367.5" ></text>
+</g>
+<g >
+<title>je_malloc (40 CPU samples, 1.00%)</title><rect x="951.3" y="357" width="13.7" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="954.25" y="367.5" ></text>
+</g>
+<g >
+<title>hook_invoke_alloc (5 CPU samples, 0.12%)</title><rect x="1305.9" y="341" width="1.7" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="1308.90" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ReadBufferFromPocoSocketBase::socketReceiveBytesImpl (12 CPU samples, 0.30%)</title><rect x="1004.0" y="85" width="4.1" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="1006.99" y="95.5" ></text>
+</g>
+<g >
+<title>grpc_core::XdsHttpExtProcFilterFactory::IsSupportedOnServers (3 CPU samples, 0.07%)</title><rect x="847.9" y="405" width="1.0" height="15.0" fill="rgb(252,217,52)" rx="2" ry="2" />
+<text  x="850.86" y="415.5" ></text>
+</g>
+</g>
+</svg>

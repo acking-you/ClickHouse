@@ -1,0 +1,1238 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1400" height="550" onload="init(evt)" viewBox="0 0 1400 550" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1400.0" height="550.0" fill="url(#background)"  />
+<text id="title" x="700.00" y="24" >JSONEachRow CPU samples | after the null-map change</text>
+<text id="details" x="10.00" y="533" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1290.00" y="24" >Search</text>
+<text id="ignorecase" x="1374.00" y="24" >ic</text>
+<text id="matched" x="1290.00" y="533" > </text>
+<g id="frames">
+<g >
+<title>DB::LimitReadBuffer::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="117" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="127.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (4 samples, 0.08%)</title><rect x="1169.8" y="309" width="1.1" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1172.82" y="319.5" ></text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::columnIndex (100 samples, 2.03%)</title><rect x="65.8" y="453" width="28.1" height="15.0" fill="rgb(250,133,49)" rx="2" ry="2" />
+<text  x="68.82" y="463.5" >D..</text>
+</g>
+<g >
+<title>DB::checkStringByFirstCharacterAndAssertTheRest (23 samples, 0.47%)</title><rect x="1181.0" y="389" width="6.5" height="15.0" fill="rgb(235,133,33)" rx="2" ry="2" />
+<text  x="1184.04" y="399.5" ></text>
+</g>
+<g >
+<title>malloc_default (16 samples, 0.33%)</title><rect x="1085.4" y="341" width="4.5" height="15.0" fill="rgb(228,112,25)" rx="2" ry="2" />
+<text  x="1088.39" y="351.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_release (80 samples, 1.63%)</title><rect x="1270.2" y="405" width="22.5" height="15.0" fill="rgb(247,133,46)" rx="2" ry="2" />
+<text  x="1273.23" y="415.5" >D..</text>
+</g>
+<g >
+<title>je_nallocx (43 samples, 0.87%)</title><rect x="903.1" y="341" width="12.0" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="906.07" y="351.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (5 samples, 0.10%)</title><rect x="482.6" y="341" width="1.4" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="485.62" y="351.5" ></text>
+</g>
+<g >
+<title>je_sdallocx (51 samples, 1.04%)</title><rect x="1338.4" y="389" width="14.3" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="1341.39" y="399.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (69 samples, 1.40%)</title><rect x="1249.5" y="325" width="19.3" height="15.0" fill="rgb(241,178,39)" rx="2" ry="2" />
+<text  x="1252.48" y="335.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (4 samples, 0.08%)</title><rect x="902.0" y="325" width="1.1" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="904.95" y="335.5" ></text>
+</g>
+<g >
+<title>operator delete (214 samples, 4.35%)</title><rect x="1292.7" y="405" width="60.0" height="15.0" fill="rgb(243,195,42)" rx="2" ry="2" />
+<text  x="1295.67" y="415.5" >operat..</text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="181" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="191.5" ></text>
+</g>
+<g >
+<title>tcache_try_gc_bin (2 samples, 0.04%)</title><rect x="430.2" y="309" width="0.5" height="15.0" fill="rgb(247,178,46)" rx="2" ry="2" />
+<text  x="433.17" y="319.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (68 samples, 1.38%)</title><rect x="1043.0" y="341" width="19.1" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1046.04" y="351.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (12 samples, 0.24%)</title><rect x="1086.5" y="325" width="3.4" height="15.0" fill="rgb(240,136,39)" rx="2" ry="2" />
+<text  x="1089.51" y="335.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::alloc (2 samples, 0.04%)</title><rect x="1208.5" y="357" width="0.6" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1211.52" y="367.5" ></text>
+</g>
+<g >
+<title>all (4,920 samples, 100%)</title><rect x="10.0" y="501" width="1380.0" height="15.0" fill="rgb(255,230,55)" rx="2" ry="2" />
+<text  x="13.00" y="511.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (4 samples, 0.08%)</title><rect x="956.9" y="341" width="1.1" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="959.93" y="351.5" ></text>
+</g>
+<g >
+<title>__llvm_libc::memcpy (22 samples, 0.45%)</title><rect x="1126.6" y="357" width="6.2" height="15.0" fill="rgb(248,154,48)" rx="2" ry="2" />
+<text  x="1129.62" y="367.5" ></text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::readField (4,386 samples, 89.15%)</title><rect x="125.3" y="453" width="1230.2" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="128.28" y="463.5" >DB::JSONEachRowRowInputFormat::readField</text>
+</g>
+<g >
+<title>[unknown] (67 samples, 1.36%)</title><rect x="917.1" y="373" width="18.8" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="920.10" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::cloneResized (339 samples, 6.89%)</title><rect x="820.0" y="373" width="95.1" height="15.0" fill="rgb(251,133,51)" rx="2" ry="2" />
+<text  x="823.05" y="383.5" >DB::ColumnS..</text>
+</g>
+<g >
+<title>PODArrayBase::reserveForNextSize (4 samples, 0.08%)</title><rect x="218.1" y="389" width="1.1" height="15.0" fill="rgb(245,194,44)" rx="2" ry="2" />
+<text  x="221.12" y="399.5" ></text>
+</g>
+<g >
+<title>DB::IColumn::decompress (86 samples, 1.75%)</title><rect x="707.6" y="341" width="24.1" height="15.0" fill="rgb(237,133,35)" rx="2" ry="2" />
+<text  x="710.57" y="351.5" >D..</text>
+</g>
+<g >
+<title>operator delete (453 samples, 9.21%)</title><rect x="528.3" y="389" width="127.1" height="15.0" fill="rgb(243,195,42)" rx="2" ry="2" />
+<text  x="531.34" y="399.5" >operator delete</text>
+</g>
+<g >
+<title>malloc_default (144 samples, 2.93%)</title><rect x="1229.8" y="357" width="40.4" height="15.0" fill="rgb(228,112,25)" rx="2" ry="2" />
+<text  x="1232.84" y="367.5" >mal..</text>
+</g>
+<g >
+<title>DB:: (9 samples, 0.18%)</title><rect x="1124.1" y="309" width="2.5" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="1127.10" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (5 samples, 0.10%)</title><rect x="573.8" y="373" width="1.4" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="576.78" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::updateNullMaskImpl (34 samples, 0.69%)</title><rect x="255.1" y="357" width="9.6" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="258.15" y="367.5" ></text>
+</g>
+<g >
+<title>Poco::Net::SocketImpl::receiveBytes (9 samples, 0.18%)</title><rect x="1124.1" y="53" width="2.5" height="15.0" fill="rgb(238,215,36)" rx="2" ry="2" />
+<text  x="1127.10" y="63.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (4 samples, 0.08%)</title><rect x="654.3" y="357" width="1.1" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="657.28" y="367.5" ></text>
+</g>
+<g >
+<title>[unknown] (6 samples, 0.12%)</title><rect x="461.6" y="341" width="1.7" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="464.59" y="351.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;char8_t, std::allocator&lt;char8_t&gt;&gt;::assign (30 samples, 0.61%)</title><rect x="1374.9" y="469" width="8.4" height="15.0" fill="rgb(244,146,43)" rx="2" ry="2" />
+<text  x="1377.85" y="479.5" ></text>
+</g>
+<g >
+<title>DB:: (9 samples, 0.18%)</title><rect x="1124.1" y="149" width="2.5" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="1127.10" y="159.5" ></text>
+</g>
+<g >
+<title>DB::ReverseIndex&lt;unsigned long, DB::ColumnString&gt;::insert (213 samples, 4.33%)</title><rect x="264.7" y="357" width="59.7" height="15.0" fill="rgb(236,133,34)" rx="2" ry="2" />
+<text  x="267.68" y="367.5" >DB::Re..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::alloc (4 samples, 0.08%)</title><rect x="1153.8" y="325" width="1.2" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1156.83" y="335.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::getDataAt (9 samples, 0.18%)</title><rect x="343.8" y="357" width="2.5" height="15.0" fill="rgb(232,133,30)" rx="2" ry="2" />
+<text  x="346.78" y="367.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_release (110 samples, 2.24%)</title><rect x="497.5" y="389" width="30.8" height="15.0" fill="rgb(247,133,46)" rx="2" ry="2" />
+<text  x="500.49" y="399.5" >DB..</text>
+</g>
+<g >
+<title>DB::CaseAwareBlockNameMap::equal (12 samples, 0.24%)</title><rect x="90.5" y="437" width="3.4" height="15.0" fill="rgb(224,133,21)" rx="2" ry="2" />
+<text  x="93.50" y="447.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (7 samples, 0.14%)</title><rect x="1350.7" y="373" width="2.0" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="1353.73" y="383.5" ></text>
+</g>
+<g >
+<title>DB::IColumn::cloneEmpty (1,146 samples, 23.29%)</title><rect x="658.5" y="405" width="321.4" height="15.0" fill="rgb(243,133,42)" rx="2" ry="2" />
+<text  x="661.49" y="415.5" >DB::IColumn::cloneEmpty</text>
+</g>
+<g >
+<title>DB::intrusive_ptr_add_ref (5 samples, 0.10%)</title><rect x="709.0" y="325" width="1.4" height="15.0" fill="rgb(245,133,44)" rx="2" ry="2" />
+<text  x="711.98" y="335.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (61 samples, 1.24%)</title><rect x="780.2" y="341" width="17.1" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="783.22" y="351.5" ></text>
+</g>
+<g >
+<title>bcmp (46 samples, 0.93%)</title><rect x="311.5" y="341" width="12.9" height="15.0" fill="rgb(238,162,36)" rx="2" ry="2" />
+<text  x="314.52" y="351.5" ></text>
+</g>
+<g >
+<title>tcache_bin_flush_small (2 samples, 0.04%)</title><rect x="1268.3" y="293" width="0.5" height="15.0" fill="rgb(230,178,28)" rx="2" ry="2" />
+<text  x="1271.27" y="303.5" ></text>
+</g>
+<g >
+<title>[unknown] (8 samples, 0.16%)</title><rect x="1124.4" y="37" width="2.2" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1127.38" y="47.5" ></text>
+</g>
+<g >
+<title>je_free (43 samples, 0.87%)</title><rect x="485.4" y="357" width="12.1" height="15.0" fill="rgb(246,136,46)" rx="2" ry="2" />
+<text  x="488.43" y="367.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (3 samples, 0.06%)</title><rect x="484.6" y="325" width="0.8" height="15.0" fill="rgb(241,178,39)" rx="2" ry="2" />
+<text  x="487.59" y="335.5" ></text>
+</g>
+<g >
+<title>PODArrayBase::reserveForNextSize (295 samples, 6.00%)</title><rect x="1187.5" y="389" width="82.7" height="15.0" fill="rgb(245,194,44)" rx="2" ry="2" />
+<text  x="1190.49" y="399.5" >PODArrayB..</text>
+</g>
+<g >
+<title>void DB::readJSONStringInto&lt;DB::PODArray&lt;char8_t, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;, void&gt; (325 samples, 6.61%)</title><rect x="1089.9" y="373" width="91.1" height="15.0" fill="rgb(244,131,43)" rx="2" ry="2" />
+<text  x="1092.88" y="383.5" >void DB::r..</text>
+</g>
+<g >
+<title>te_event_trigger (2 samples, 0.04%)</title><rect x="1180.5" y="309" width="0.5" height="15.0" fill="rgb(240,136,39)" rx="2" ry="2" />
+<text  x="1183.48" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (53 samples, 1.08%)</title><rect x="1253.4" y="277" width="14.9" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1256.40" y="287.5" ></text>
+</g>
+<g >
+<title>je_malloc (3 samples, 0.06%)</title><rect x="997.3" y="341" width="0.9" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="1000.32" y="351.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocThrow (4 samples, 0.08%)</title><rect x="890.7" y="341" width="1.2" height="15.0" fill="rgb(234,119,31)" rx="2" ry="2" />
+<text  x="893.73" y="351.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (42 samples, 0.85%)</title><rect x="1303.6" y="389" width="11.8" height="15.0" fill="rgb(246,119,46)" rx="2" ry="2" />
+<text  x="1306.61" y="399.5" ></text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="277" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="287.5" ></text>
+</g>
+<g >
+<title>__cxxabiv1::__getExceptionClass (2 samples, 0.04%)</title><rect x="1251.7" y="309" width="0.6" height="15.0" fill="rgb(240,144,38)" rx="2" ry="2" />
+<text  x="1254.72" y="319.5" ></text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::checkEndOfData (7 samples, 0.14%)</title><rect x="24.3" y="469" width="2.0" height="15.0" fill="rgb(235,133,33)" rx="2" ry="2" />
+<text  x="27.30" y="479.5" ></text>
+</g>
+<g >
+<title>DB::ColumnNullable::~ColumnNullable (1,102 samples, 22.40%)</title><rect x="346.3" y="405" width="309.1" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="349.30" y="415.5" >DB::ColumnNullable::~ColumnNullable</text>
+</g>
+<g >
+<title>arena_ralloc (4 samples, 0.08%)</title><rect x="218.1" y="341" width="1.1" height="15.0" fill="rgb(238,137,36)" rx="2" ry="2" />
+<text  x="221.12" y="351.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (4 samples, 0.08%)</title><rect x="484.3" y="341" width="1.1" height="15.0" fill="rgb(240,136,39)" rx="2" ry="2" />
+<text  x="487.30" y="351.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (12 samples, 0.24%)</title><rect x="887.4" y="325" width="3.3" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="890.37" y="335.5" ></text>
+</g>
+<g >
+<title>DB::AutoCaseBlockNameMap::stringCompare (31 samples, 0.63%)</title><rect x="81.8" y="437" width="8.7" height="15.0" fill="rgb(248,133,47)" rx="2" ry="2" />
+<text  x="84.80" y="447.5" ></text>
+</g>
+<g >
+<title>PODArrayBase::reserveForNextSize (13 samples, 0.26%)</title><rect x="994.5" y="373" width="3.7" height="15.0" fill="rgb(245,194,44)" rx="2" ry="2" />
+<text  x="997.51" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ColumnVector&lt;char8_t&gt;::byteSize (4 samples, 0.08%)</title><rect x="263.6" y="341" width="1.1" height="15.0" fill="rgb(245,133,44)" rx="2" ry="2" />
+<text  x="266.56" y="351.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::realloc (4 samples, 0.08%)</title><rect x="218.1" y="373" width="1.1" height="15.0" fill="rgb(238,144,36)" rx="2" ry="2" />
+<text  x="221.12" y="383.5" ></text>
+</g>
+<g >
+<title>DB:: (9 samples, 0.18%)</title><rect x="1124.1" y="213" width="2.5" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="1127.10" y="223.5" ></text>
+</g>
+<g >
+<title>DB::ReadBufferFromPocoSocketBase::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="85" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="95.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (57 samples, 1.16%)</title><rect x="1155.0" y="325" width="15.9" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1157.95" y="335.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 samples, 0.06%)</title><rect x="967.6" y="341" width="0.8" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="970.59" y="351.5" ></text>
+</g>
+<g >
+<title>je_malloc (34 samples, 0.69%)</title><rect x="1170.9" y="325" width="9.6" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="1173.94" y="335.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 samples, 0.06%)</title><rect x="496.6" y="341" width="0.9" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="499.65" y="351.5" ></text>
+</g>
+<g >
+<title>operator new[] (181 samples, 3.68%)</title><rect x="864.4" y="357" width="50.7" height="15.0" fill="rgb(238,195,37)" rx="2" ry="2" />
+<text  x="867.37" y="367.5" >opera..</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::uniqueInsertFrom (439 samples, 8.92%)</title><rect x="223.2" y="389" width="123.1" height="15.0" fill="rgb(234,133,31)" rx="2" ry="2" />
+<text  x="226.17" y="399.5" >DB::ColumnUniqu..</text>
+</g>
+<g >
+<title>je_malloc (40 samples, 0.81%)</title><rect x="891.9" y="341" width="11.2" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="894.85" y="351.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (4 samples, 0.08%)</title><rect x="1314.3" y="373" width="1.1" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1317.27" y="383.5" ></text>
+</g>
+<g >
+<title>[unknown] (76 samples, 1.54%)</title><rect x="710.4" y="325" width="21.3" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="713.38" y="335.5" >[..</text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="229" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="239.5" ></text>
+</g>
+<g >
+<title>DB::JSONUtils::skipColon (66 samples, 1.34%)</title><rect x="1355.5" y="453" width="18.5" height="15.0" fill="rgb(253,133,53)" rx="2" ry="2" />
+<text  x="1358.50" y="463.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (2 samples, 0.04%)</title><rect x="1237.7" y="341" width="0.6" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="1240.70" y="351.5" ></text>
+</g>
+<g >
+<title>je_free (116 samples, 2.36%)</title><rect x="430.7" y="357" width="32.6" height="15.0" fill="rgb(246,136,46)" rx="2" ry="2" />
+<text  x="433.73" y="367.5" >je..</text>
+</g>
+<g >
+<title>COW&lt;DB::IColumn&gt;::mutable_ptr&lt;DB::ColumnNullable&gt; COWHelper&lt;DB::IColumnHelper&lt;DB::ColumnNullable, DB::IColumn&gt;, DB::ColumnNullable&gt;::create&lt;COW&lt;DB::IColumn&gt;::mutable_ptr&lt;DB::IColum (496 samples, 10.08%)</title><rect x="680.9" y="373" width="139.1" height="15.0" fill="rgb(231,154,29)" rx="2" ry="2" />
+<text  x="683.93" y="383.5" >COW&lt;DB::IColumn&gt;:..</text>
+</g>
+<g >
+<title>peak_event_handler (6 samples, 0.12%)</title><rect x="1247.0" y="325" width="1.6" height="15.0" fill="rgb(245,200,44)" rx="2" ry="2" />
+<text  x="1249.95" y="335.5" ></text>
+</g>
+<g >
+<title>je_malloc (27 samples, 0.55%)</title><rect x="1222.3" y="357" width="7.5" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="1225.27" y="367.5" ></text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="245" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="255.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (12 samples, 0.24%)</title><rect x="393.1" y="341" width="3.4" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="396.15" y="351.5" ></text>
+</g>
+<g >
+<title>large_ralloc (4 samples, 0.08%)</title><rect x="218.1" y="325" width="1.1" height="15.0" fill="rgb(238,101,36)" rx="2" ry="2" />
+<text  x="221.12" y="335.5" ></text>
+</g>
+<g >
+<title>clock_gettime (53 samples, 1.08%)</title><rect x="415.3" y="293" width="14.9" height="15.0" fill="rgb(236,102,34)" rx="2" ry="2" />
+<text  x="418.30" y="303.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_add_ref (3 samples, 0.06%)</title><rect x="755.5" y="357" width="0.9" height="15.0" fill="rgb(245,133,44)" rx="2" ry="2" />
+<text  x="758.54" y="367.5" ></text>
+</g>
+<g >
+<title>tcache_gc_event (68 samples, 1.38%)</title><rect x="411.7" y="325" width="19.0" height="15.0" fill="rgb(241,178,39)" rx="2" ry="2" />
+<text  x="414.66" y="335.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (221 samples, 4.49%)</title><rect x="1027.9" y="357" width="62.0" height="15.0" fill="rgb(238,144,36)" rx="2" ry="2" />
+<text  x="1030.89" y="367.5" >Alloca..</text>
+</g>
+<g >
+<title>DB::SerializationNullable::deserializeTextJSON (1,035 samples, 21.04%)</title><rect x="979.9" y="405" width="290.3" height="15.0" fill="rgb(231,133,28)" rx="2" ry="2" />
+<text  x="982.93" y="415.5" >DB::SerializationNullable::deserializeT..</text>
+</g>
+<g >
+<title>[unknown] (2 samples, 0.04%)</title><rect x="484.9" y="277" width="0.5" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="487.87" y="287.5" ></text>
+</g>
+<g >
+<title>[unknown] (64 samples, 1.30%)</title><rect x="756.4" y="357" width="17.9" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="759.38" y="367.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (3 samples, 0.06%)</title><rect x="1061.3" y="325" width="0.8" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1064.27" y="335.5" ></text>
+</g>
+<g >
+<title>DB::AggregateFunctionQuantile&lt;float, DB:: (9 samples, 0.18%)</title><rect x="341.3" y="357" width="2.5" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="344.26" y="367.5" ></text>
+</g>
+<g >
+<title>arena_ptr_array_flush (2 samples, 0.04%)</title><rect x="1268.3" y="277" width="0.5" height="15.0" fill="rgb(236,137,34)" rx="2" ry="2" />
+<text  x="1271.27" y="287.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (47 samples, 0.96%)</title><rect x="1209.1" y="357" width="13.2" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1212.09" y="367.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (88 samples, 1.79%)</title><rect x="549.1" y="373" width="24.7" height="15.0" fill="rgb(246,119,46)" rx="2" ry="2" />
+<text  x="552.10" y="383.5" >C..</text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="133" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="143.5" ></text>
+</g>
+<g >
+<title>[unknown] (5 samples, 0.10%)</title><rect x="754.1" y="341" width="1.4" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="757.13" y="351.5" ></text>
+</g>
+<g >
+<title>do_rallocx (4 samples, 0.08%)</title><rect x="218.1" y="357" width="1.1" height="15.0" fill="rgb(252,189,52)" rx="2" ry="2" />
+<text  x="221.12" y="367.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (12 samples, 0.24%)</title><rect x="994.8" y="357" width="3.4" height="15.0" fill="rgb(238,144,36)" rx="2" ry="2" />
+<text  x="997.79" y="367.5" ></text>
+</g>
+<g >
+<title>tcache_try_gc_bin (2 samples, 0.04%)</title><rect x="1268.3" y="309" width="0.5" height="15.0" fill="rgb(247,178,46)" rx="2" ry="2" />
+<text  x="1271.27" y="319.5" ></text>
+</g>
+<g >
+<title>__llvm_libc::memcpy_ge64_avx512 (4 samples, 0.08%)</title><rect x="218.1" y="309" width="1.1" height="15.0" fill="rgb(246,154,45)" rx="2" ry="2" />
+<text  x="221.12" y="319.5" ></text>
+</g>
+<g >
+<title>te_event_trigger (114 samples, 2.32%)</title><rect x="1238.3" y="341" width="31.9" height="15.0" fill="rgb(240,136,39)" rx="2" ry="2" />
+<text  x="1241.26" y="351.5" >te..</text>
+</g>
+<g >
+<title>operator new[] (157 samples, 3.19%)</title><rect x="935.9" y="373" width="44.0" height="15.0" fill="rgb(238,195,37)" rx="2" ry="2" />
+<text  x="938.89" y="383.5" >oper..</text>
+</g>
+<g >
+<title>malloc_default (2 samples, 0.04%)</title><rect x="1180.5" y="325" width="0.5" height="15.0" fill="rgb(228,112,25)" rx="2" ry="2" />
+<text  x="1183.48" y="335.5" ></text>
+</g>
+<g >
+<title>free_default (122 samples, 2.48%)</title><rect x="396.5" y="357" width="34.2" height="15.0" fill="rgb(228,177,25)" rx="2" ry="2" />
+<text  x="399.51" y="367.5" >fr..</text>
+</g>
+<g >
+<title>[unknown] (49 samples, 1.00%)</title><rect x="416.4" y="277" width="13.8" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="419.43" y="287.5" ></text>
+</g>
+<g >
+<title>[unknown] (2 samples, 0.04%)</title><rect x="1229.3" y="341" width="0.5" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1232.28" y="351.5" ></text>
+</g>
+<g >
+<title>__cxxabiv1::__getExceptionClass (3 samples, 0.06%)</title><rect x="413.3" y="309" width="0.9" height="15.0" fill="rgb(240,144,38)" rx="2" ry="2" />
+<text  x="416.34" y="319.5" ></text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::readColumnName (112 samples, 2.28%)</title><rect x="93.9" y="453" width="31.4" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="96.87" y="463.5" >DB..</text>
+</g>
+<g >
+<title>DB::ColumnNullable::cloneResized (1,127 samples, 22.91%)</title><rect x="663.8" y="389" width="316.1" height="15.0" fill="rgb(251,133,51)" rx="2" ry="2" />
+<text  x="666.82" y="399.5" >DB::ColumnNullable::cloneResized</text>
+</g>
+<g >
+<title>nstime_update_impl (3 samples, 0.06%)</title><rect x="484.6" y="309" width="0.8" height="15.0" fill="rgb(238,179,36)" rx="2" ry="2" />
+<text  x="487.59" y="319.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::alloc (3 samples, 0.06%)</title><rect x="1042.2" y="341" width="0.8" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="1045.20" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="261" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="271.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (126 samples, 2.56%)</title><rect x="1145.7" y="341" width="35.3" height="15.0" fill="rgb(238,144,36)" rx="2" ry="2" />
+<text  x="1148.70" y="351.5" >Al..</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::uniqueInsertData (296 samples, 6.02%)</title><rect x="241.4" y="373" width="83.0" height="15.0" fill="rgb(235,133,33)" rx="2" ry="2" />
+<text  x="244.40" y="383.5" >DB::Colum..</text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (11 samples, 0.22%)</title><rect x="570.7" y="357" width="3.1" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="573.70" y="367.5" ></text>
+</g>
+<g >
+<title>nstime_update_impl (57 samples, 1.16%)</title><rect x="1252.3" y="309" width="16.0" height="15.0" fill="rgb(238,179,36)" rx="2" ry="2" />
+<text  x="1255.28" y="319.5" ></text>
+</g>
+<g >
+<title>je_sdallocx (93 samples, 1.89%)</title><rect x="629.3" y="373" width="26.1" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="632.32" y="383.5" >j..</text>
+</g>
+<g >
+<title>DB::ColumnNullable::isNullAt (10 samples, 0.20%)</title><rect x="238.6" y="373" width="2.8" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="241.60" y="383.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::~ColumnString (403 samples, 8.19%)</title><rect x="350.2" y="389" width="113.1" height="15.0" fill="rgb(243,133,42)" rx="2" ry="2" />
+<text  x="353.23" y="399.5" >DB::ColumnStr..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocThrow (8 samples, 0.16%)</title><rect x="797.3" y="341" width="2.3" height="15.0" fill="rgb(234,119,31)" rx="2" ry="2" />
+<text  x="800.33" y="351.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::free (374 samples, 7.60%)</title><rect x="358.4" y="373" width="104.9" height="15.0" fill="rgb(246,144,46)" rx="2" ry="2" />
+<text  x="361.37" y="383.5" >Allocator&lt;fa..</text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (4 samples, 0.08%)</title><rect x="914.0" y="325" width="1.1" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="917.01" y="335.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (54 samples, 1.10%)</title><rect x="942.9" y="357" width="15.1" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="945.90" y="367.5" ></text>
+</g>
+<g >
+<title>DB::SerializationLowCardinality::deserializeImpl (4,165 samples, 84.65%)</title><rect x="184.5" y="421" width="1168.2" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="187.46" y="431.5" >DB::SerializationLowCardinality::deserializeImpl</text>
+</g>
+<g >
+<title>DB::DataTypeLowCardinality::isLowCardinalityNullable (3 samples, 0.06%)</title><rect x="179.7" y="421" width="0.8" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="182.70" y="431.5" ></text>
+</g>
+<g >
+<title>void DB::PODArrayBase&lt;1ul, 4096ul, Allocator&lt;false, false&gt;, 63ul, 64ul&gt;::reallocPowerOfTwoElements&lt;&gt; (172 samples, 3.50%)</title><rect x="1132.8" y="357" width="48.2" height="15.0" fill="rgb(241,131,39)" rx="2" ry="2" />
+<text  x="1135.79" y="367.5" >void..</text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="165" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="175.5" ></text>
+</g>
+<g >
+<title>[unknown] (3 samples, 0.06%)</title><rect x="1084.3" y="325" width="0.8" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1087.27" y="335.5" ></text>
+</g>
+<g >
+<title>DB::JSONUtils::readField (4,253 samples, 86.44%)</title><rect x="162.6" y="437" width="1192.9" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="165.59" y="447.5" >DB::JSONUtils::readField</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (66 samples, 1.34%)</title><rect x="872.2" y="341" width="18.5" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="875.22" y="351.5" ></text>
+</g>
+<g >
+<title>prof_sample_new_event_wait (3 samples, 0.06%)</title><rect x="1248.6" y="325" width="0.9" height="15.0" fill="rgb(237,184,35)" rx="2" ry="2" />
+<text  x="1251.63" y="335.5" ></text>
+</g>
+<g >
+<title>prof_sample_new_event_wait (6 samples, 0.12%)</title><rect x="1087.6" y="309" width="1.7" height="15.0" fill="rgb(237,184,35)" rx="2" ry="2" />
+<text  x="1090.63" y="319.5" ></text>
+</g>
+<g >
+<title>DB::ColumnNullable::ColumnNullable (231 samples, 4.70%)</title><rect x="690.7" y="357" width="64.8" height="15.0" fill="rgb(241,133,40)" rx="2" ry="2" />
+<text  x="693.74" y="367.5" >DB::Col..</text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::advanceToNextKey (110 samples, 2.24%)</title><rect x="35.0" y="453" width="30.8" height="15.0" fill="rgb(248,133,48)" rx="2" ry="2" />
+<text  x="37.96" y="463.5" >DB..</text>
+</g>
+<g >
+<title>PODArrayBase::reserveForNextSize (252 samples, 5.12%)</title><rect x="1019.2" y="373" width="70.7" height="15.0" fill="rgb(245,194,44)" rx="2" ry="2" />
+<text  x="1022.20" y="383.5" >PODArra..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocImpl (7 samples, 0.14%)</title><rect x="995.4" y="341" width="1.9" height="15.0" fill="rgb(238,119,36)" rx="2" ry="2" />
+<text  x="998.35" y="351.5" ></text>
+</g>
+<g >
+<title>je_malloc (31 samples, 0.63%)</title><rect x="959.7" y="357" width="8.7" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="962.73" y="367.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="293" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="303.5" ></text>
+</g>
+<g >
+<title>operator new[] (163 samples, 3.31%)</title><rect x="774.3" y="357" width="45.7" height="15.0" fill="rgb(238,195,37)" rx="2" ry="2" />
+<text  x="777.33" y="367.5" >oper..</text>
+</g>
+<g >
+<title>je_nallocx (40 samples, 0.81%)</title><rect x="968.4" y="357" width="11.2" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="971.43" y="367.5" ></text>
+</g>
+<g >
+<title>free_default (5 samples, 0.10%)</title><rect x="484.0" y="357" width="1.4" height="15.0" fill="rgb(228,177,25)" rx="2" ry="2" />
+<text  x="487.02" y="367.5" ></text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (34 samples, 0.69%)</title><rect x="474.5" y="357" width="9.5" height="15.0" fill="rgb(246,119,46)" rx="2" ry="2" />
+<text  x="477.49" y="367.5" ></text>
+</g>
+<g >
+<title>log (5 samples, 0.10%)</title><rect x="1087.9" y="293" width="1.4" height="15.0" fill="rgb(248,138,48)" rx="2" ry="2" />
+<text  x="1090.91" y="303.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="197" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="207.5" ></text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (5 samples, 0.10%)</title><rect x="795.9" y="325" width="1.4" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="798.93" y="335.5" ></text>
+</g>
+<g >
+<title>void std::vector&lt;char, std::allocator&lt;char&gt;&gt;::__assign_with_size[abi:fqe220101]&lt;std::_ClassicAlgPolicy, char*, char*&gt; (24 samples, 0.49%)</title><rect x="1383.3" y="469" width="6.7" height="15.0" fill="rgb(237,131,35)" rx="2" ry="2" />
+<text  x="1386.27" y="479.5" ></text>
+</g>
+<g >
+<title>clock_gettime (54 samples, 1.10%)</title><rect x="1253.1" y="293" width="15.2" height="15.0" fill="rgb(236,102,34)" rx="2" ry="2" />
+<text  x="1256.12" y="303.5" ></text>
+</g>
+<g >
+<title>__llvm_libc::memcpy_ge64_resolve (3 samples, 0.06%)</title><rect x="1386.6" y="453" width="0.9" height="15.0" fill="rgb(244,154,43)" rx="2" ry="2" />
+<text  x="1389.63" y="463.5" ></text>
+</g>
+<g >
+<title>[unknown] (3 samples, 0.06%)</title><rect x="1179.6" y="309" width="0.9" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1182.63" y="319.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_add_ref (2 samples, 0.04%)</title><rect x="840.5" y="357" width="0.6" height="15.0" fill="rgb(245,133,44)" rx="2" ry="2" />
+<text  x="843.52" y="367.5" ></text>
+</g>
+<g >
+<title>DB::ReadBufferFromPocoSocketBase::socketReceiveBytesImpl (9 samples, 0.18%)</title><rect x="1124.1" y="69" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="79.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="101" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="111.5" ></text>
+</g>
+<g >
+<title>DB::ColumnIndex::insertIndex (49 samples, 1.00%)</title><rect x="205.5" y="405" width="13.7" height="15.0" fill="rgb(250,133,49)" rx="2" ry="2" />
+<text  x="208.50" y="415.5" ></text>
+</g>
+<g >
+<title>bcmp (21 samples, 0.43%)</title><rect x="84.6" y="421" width="5.9" height="15.0" fill="rgb(238,162,36)" rx="2" ry="2" />
+<text  x="87.61" y="431.5" ></text>
+</g>
+<g >
+<title>je_sallocx (82 samples, 1.67%)</title><rect x="1315.4" y="389" width="23.0" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="1318.39" y="399.5" >j..</text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnVector&lt;char8_t&gt;&gt;::getNestedColumn (11 samples, 0.22%)</title><rect x="655.4" y="405" width="3.1" height="15.0" fill="rgb(237,133,36)" rx="2" ry="2" />
+<text  x="658.40" y="415.5" ></text>
+</g>
+<g >
+<title>DB::ConcatReadBuffer::nextImpl (9 samples, 0.18%)</title><rect x="1124.1" y="341" width="2.5" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1127.10" y="351.5" ></text>
+</g>
+<g >
+<title>je_malloc (39 samples, 0.79%)</title><rect x="799.6" y="341" width="10.9" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="802.57" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ColumnUnique&lt;DB::ColumnString&gt;::uniqueInsertFrom (78 samples, 1.59%)</title><rect x="324.4" y="373" width="21.9" height="15.0" fill="rgb(234,133,31)" rx="2" ry="2" />
+<text  x="327.43" y="383.5" >D..</text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="325" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="335.5" ></text>
+</g>
+<g >
+<title>log (3 samples, 0.06%)</title><rect x="1248.6" y="309" width="0.9" height="15.0" fill="rgb(248,138,48)" rx="2" ry="2" />
+<text  x="1251.63" y="319.5" ></text>
+</g>
+<g >
+<title>te_user_event_enabled (5 samples, 0.10%)</title><rect x="1268.8" y="325" width="1.4" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="1271.83" y="335.5" ></text>
+</g>
+<g >
+<title>je_malloc (83 samples, 1.69%)</title><rect x="1062.1" y="341" width="23.3" height="15.0" fill="rgb(238,136,36)" rx="2" ry="2" />
+<text  x="1065.11" y="351.5" >j..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::free (85 samples, 1.73%)</title><rect x="372.7" y="357" width="23.8" height="15.0" fill="rgb(246,119,46)" rx="2" ry="2" />
+<text  x="375.67" y="367.5" >C..</text>
+</g>
+<g >
+<title>[unknown] (3 samples, 0.06%)</title><rect x="626.8" y="357" width="0.8" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="629.79" y="367.5" ></text>
+</g>
+<g >
+<title>DB::AggregateFunctionQuantile&lt;float, DB:: (6 samples, 0.12%)</title><rect x="178.0" y="421" width="1.7" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="181.01" y="431.5" ></text>
+</g>
+<g >
+<title>DB::ColumnLowCardinality::insertFromFullColumn (453 samples, 9.21%)</title><rect x="219.2" y="405" width="127.1" height="15.0" fill="rgb(237,133,36)" rx="2" ry="2" />
+<text  x="222.24" y="415.5" >DB::ColumnLowCa..</text>
+</g>
+<g >
+<title>nstime_update_impl (57 samples, 1.16%)</title><rect x="414.2" y="309" width="16.0" height="15.0" fill="rgb(238,179,36)" rx="2" ry="2" />
+<text  x="417.18" y="319.5" ></text>
+</g>
+<g >
+<title>[unknown] (83 samples, 1.69%)</title><rect x="841.1" y="357" width="23.3" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="844.09" y="367.5" >[..</text>
+</g>
+<g >
+<title>DB::CurrentThread::getMemoryTracker (2 samples, 0.04%)</title><rect x="1221.7" y="341" width="0.6" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="1224.71" y="351.5" ></text>
+</g>
+<g >
+<title>[unknown] (2 samples, 0.04%)</title><rect x="1374.3" y="469" width="0.6" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1377.29" y="479.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (6 samples, 0.12%)</title><rect x="627.6" y="357" width="1.7" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="630.63" y="367.5" ></text>
+</g>
+<g >
+<title>DB::SerializationLowCardinality::deserializeTextJSON (9 samples, 0.18%)</title><rect x="1352.7" y="421" width="2.5" height="15.0" fill="rgb(231,133,28)" rx="2" ry="2" />
+<text  x="1355.70" y="431.5" ></text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::readRow (4,920 samples, 100.00%)</title><rect x="10.0" y="485" width="1380.0" height="15.0" fill="rgb(231,133,28)" rx="2" ry="2" />
+<text  x="13.00" y="495.5" >DB::JSONEachRowRowInputFormat::readRow</text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (6 samples, 0.12%)</title><rect x="818.4" y="325" width="1.6" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="821.37" y="335.5" ></text>
+</g>
+<g >
+<title>DB::FunctionSeriesDecomposeSTL::useDefaultImplementationForConstants (14 samples, 0.28%)</title><rect x="180.5" y="421" width="4.0" height="15.0" fill="rgb(238,133,36)" rx="2" ry="2" />
+<text  x="183.54" y="431.5" ></text>
+</g>
+<g >
+<title>DB::ColumnVector&lt;char8_t&gt;::~ColumnVector (122 samples, 2.48%)</title><rect x="463.3" y="389" width="34.2" height="15.0" fill="rgb(241,133,39)" rx="2" ry="2" />
+<text  x="466.27" y="399.5" >DB..</text>
+</g>
+<g >
+<title>DB::JSONEachRowRowInputFormat::readJSONObject (4,805 samples, 97.66%)</title><rect x="26.3" y="469" width="1347.7" height="15.0" fill="rgb(241,133,39)" rx="2" ry="2" />
+<text  x="29.27" y="479.5" >DB::JSONEachRowRowInputFormat::readJSONObject</text>
+</g>
+<g >
+<title>__llvm_libc::memmove (9 samples, 0.18%)</title><rect x="1387.5" y="453" width="2.5" height="15.0" fill="rgb(242,154,41)" rx="2" ry="2" />
+<text  x="1390.48" y="463.5" ></text>
+</g>
+<g >
+<title>DB::SerializationString::deserializeTextJSON (652 samples, 13.25%)</title><rect x="998.2" y="389" width="182.8" height="15.0" fill="rgb(231,133,28)" rx="2" ry="2" />
+<text  x="1001.16" y="399.5" >DB::SerializationString..</text>
+</g>
+<g >
+<title>DB::isColumnConst (5 samples, 0.10%)</title><rect x="752.7" y="341" width="1.4" height="15.0" fill="rgb(237,133,35)" rx="2" ry="2" />
+<text  x="755.73" y="351.5" ></text>
+</g>
+<g >
+<title>jemalloc_tls_addr_tsd_tls (3 samples, 0.06%)</title><rect x="978.8" y="341" width="0.8" height="15.0" fill="rgb(230,168,28)" rx="2" ry="2" />
+<text  x="981.80" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ColumnString::insertDefault (15 samples, 0.30%)</title><rect x="994.0" y="389" width="4.2" height="15.0" fill="rgb(228,133,25)" rx="2" ry="2" />
+<text  x="996.95" y="399.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::free (109 samples, 2.22%)</title><rect x="466.9" y="373" width="30.6" height="15.0" fill="rgb(246,144,46)" rx="2" ry="2" />
+<text  x="469.91" y="383.5" >Al..</text>
+</g>
+<g >
+<title>te_event_trigger (94 samples, 1.91%)</title><rect x="404.4" y="341" width="26.3" height="15.0" fill="rgb(240,136,39)" rx="2" ry="2" />
+<text  x="407.37" y="351.5" >t..</text>
+</g>
+<g >
+<title>CurrentMemoryTracker::allocThrow (6 samples, 0.12%)</title><rect x="958.0" y="357" width="1.7" height="15.0" fill="rgb(234,119,31)" rx="2" ry="2" />
+<text  x="961.05" y="367.5" ></text>
+</g>
+<g >
+<title>DB::skipFieldDelimiter (41 samples, 0.83%)</title><rect x="54.3" y="437" width="11.5" height="15.0" fill="rgb(240,133,38)" rx="2" ry="2" />
+<text  x="57.32" y="447.5" ></text>
+</g>
+<g >
+<title>clock_gettime (3 samples, 0.06%)</title><rect x="484.6" y="293" width="0.8" height="15.0" fill="rgb(236,102,34)" rx="2" ry="2" />
+<text  x="487.59" y="303.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_release (75 samples, 1.52%)</title><rect x="731.7" y="341" width="21.0" height="15.0" fill="rgb(247,133,46)" rx="2" ry="2" />
+<text  x="734.70" y="351.5" ></text>
+</g>
+<g >
+<title>DB::ReadBuffer::next (9 samples, 0.18%)</title><rect x="1124.1" y="357" width="2.5" height="15.0" fill="rgb(230,133,27)" rx="2" ry="2" />
+<text  x="1127.10" y="367.5" ></text>
+</g>
+<g >
+<title>Allocator&lt;false, false&gt;::alloc (271 samples, 5.51%)</title><rect x="1194.2" y="373" width="76.0" height="15.0" fill="rgb(238,144,36)" rx="2" ry="2" />
+<text  x="1197.22" y="383.5" >Allocato..</text>
+</g>
+<g >
+<title>tcache_gc_event (2 samples, 0.04%)</title><rect x="1089.3" y="309" width="0.6" height="15.0" fill="rgb(241,178,39)" rx="2" ry="2" />
+<text  x="1092.32" y="319.5" ></text>
+</g>
+<g >
+<title>DB::intrusive_ptr_add_ref (7 samples, 0.14%)</title><rect x="915.1" y="373" width="2.0" height="15.0" fill="rgb(245,133,44)" rx="2" ry="2" />
+<text  x="918.13" y="383.5" ></text>
+</g>
+<g >
+<title>je_sallocx (193 samples, 3.92%)</title><rect x="575.2" y="373" width="54.1" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="578.18" y="383.5" >je_sa..</text>
+</g>
+<g >
+<title>je_nallocx (34 samples, 0.69%)</title><rect x="810.5" y="341" width="9.5" height="15.0" fill="rgb(252,136,52)" rx="2" ry="2" />
+<text  x="813.51" y="351.5" ></text>
+</g>
+</g>
+</svg>

@@ -1,0 +1,15 @@
+{"query_id":"nullable-bench-after-0","query_duration_ms":802,"written_rows":400000,"cpu_us":802375}
+{"query_id":"nullable-bench-after-1","query_duration_ms":801,"written_rows":400000,"cpu_us":801536}
+{"query_id":"nullable-bench-after-2","query_duration_ms":807,"written_rows":400000,"cpu_us":807424}
+{"query_id":"nullable-bench-after-3","query_duration_ms":799,"written_rows":400000,"cpu_us":798856}
+{"query_id":"nullable-bench-after-4","query_duration_ms":802,"written_rows":400000,"cpu_us":802912}
+{"query_id":"nullable-bench-after-5","query_duration_ms":795,"written_rows":400000,"cpu_us":796200}
+{"query_id":"nullable-bench-after-6","query_duration_ms":796,"written_rows":400000,"cpu_us":796549}
+{"query_id":"nullable-bench-after-7","query_duration_ms":811,"written_rows":400000,"cpu_us":810806}
+{"query_id":"nullable-bench-after-8","query_duration_ms":797,"written_rows":400000,"cpu_us":797657}
+{"query_id":"nullable-bench-after-9","query_duration_ms":787,"written_rows":400000,"cpu_us":787845}
+{"query_id":"nullable-bench-after-10","query_duration_ms":776,"written_rows":400000,"cpu_us":777422}
+{"query_id":"nullable-bench-after-11","query_duration_ms":780,"written_rows":400000,"cpu_us":779876}
+{"query_id":"nullable-bench-after-12","query_duration_ms":805,"written_rows":400000,"cpu_us":805952}
+{"query_id":"nullable-bench-after-13","query_duration_ms":796,"written_rows":400000,"cpu_us":795769}
+{"query_id":"nullable-bench-after-14","query_duration_ms":804,"written_rows":400000,"cpu_us":805381}
